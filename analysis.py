@@ -5,7 +5,7 @@ import networkx as nx
 import matplotlib.pyplot as plt
 
 
-df = pd.read_csv("./data/csv/game.csv")
+df = pd.read_csv("./nba/game.csv")
 df.sort_values(by=["game_date"], inplace=True)
 
 cond = df["team_abbreviation_home"] == "HOU"
