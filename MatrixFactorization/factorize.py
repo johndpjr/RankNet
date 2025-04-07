@@ -1,6 +1,8 @@
 import numpy as np
 from sklearn.decomposition import TruncatedSVD
 import json
+import pandas as pd
+import os
 
 def load_data():
     matrix = np.load("adj_matrix.npy")
@@ -16,13 +18,11 @@ def mask_known_entries(matrix, keep_ratio=0.75, seed=42):
 
     total = len(indices)
     keep_count = int(total * keep_ratio)
-    keep_indices = indices[:keep_count]
     test_indices = indices[keep_count:]
 
-    # Create a new matrix for training
     train_matrix = matrix.copy()
     for i, j in test_indices:
-        train_matrix[i, j] = np.nan  # hide test values
+        train_matrix[i, j] = np.nan
 
     test_mask = np.full(matrix.shape, False)
     for i, j in test_indices:
@@ -42,33 +42,46 @@ def apply_svd(matrix, rank=10):
     reconstructed = np.dot(U, V)
     return reconstructed
 
-def evaluate_on_test(reconstructed, actual, test_mask, threshold=0.5):
-    predictions = (reconstructed >= threshold).astype(int)
-    actual_binary = np.where(actual >= 0.5, 1, 0)
+def evaluate_on_test(reconstructed, actual, test_mask):
+    pred_sign = np.sign(reconstructed)
+    true_sign = np.sign(actual)
 
-    mismatches = (predictions != actual_binary) & test_mask
+    mismatches = (pred_sign != true_sign) & test_mask
     total_errors = np.sum(mismatches)
     total_test = np.sum(test_mask)
-
     accuracy = (total_test - total_errors) / total_test
     return total_errors, total_test, accuracy
 
 def main():
+    # Detect season name from the CSV file used in preprocess step
+    season_name = "2017_2018"  # You can later automate this with CLI args or filenames
+
     matrix, _ = load_data()
 
-    # Try this at different values: 0.25, 0.5, 0.75
-    train_matrix, test_mask = mask_known_entries(matrix, keep_ratio=0.9)
+    results = []
 
-    reconstructed = apply_svd(train_matrix, rank=10)
+    for keep_ratio in np.linspace(0.1, 0.9, 9):
+        train_matrix, test_mask = mask_known_entries(matrix, keep_ratio=keep_ratio)
+        reconstructed = apply_svd(train_matrix, rank=30)
+        total_errors, total_test, accuracy = evaluate_on_test(reconstructed, matrix, test_mask)
 
-    total_errors, total_test, accuracy = evaluate_on_test(
-        reconstructed, matrix, test_mask
-    )
+        if total_test == 0:
+            print(f"Keep Ratio: {keep_ratio:.2f} | Skipped (no test data)")
+            continue
 
-    print("🎯 Evaluation on Held-Out Data:")
-    print(f"Tested matchups: {total_test}")
-    print(f"Prediction errors: {total_errors}")
-    print(f"Accuracy on unseen games: {accuracy:.4f}")
+        print(f"Keep Ratio: {keep_ratio:.2f} | Accuracy: {accuracy:.4f}")
+        results.append({
+            "keep_ratio": round(keep_ratio, 2),
+            "test_size": int(total_test),
+            "prediction_errors": int(total_errors),
+            "accuracy": round(accuracy, 4)
+    })
+
+    # Save results to CSV
+    df = pd.DataFrame(results)
+    filename = f"results_{season_name}.csv"
+    df.to_csv(filename, index=False)
+    print(f"\n Saved results to {filename}")
 
 if __name__ == "__main__":
     main()
