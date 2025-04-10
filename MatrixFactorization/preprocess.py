@@ -11,7 +11,6 @@ def build_margin_matrix(df, team_to_index, clip_margin=None):
     n = len(team_to_index)
     matrix = np.full((n, n), np.nan)
     
-    # Dictionary to store all results for each (home, away) matchup
     matchup_results = {}
 
     for _, row in df.iterrows():
@@ -25,40 +24,44 @@ def build_margin_matrix(df, team_to_index, clip_margin=None):
 
         i = team_to_index[home]
         j = team_to_index[away]
-
         diff = pts_home - pts_away
 
         if clip_margin:
             diff = max(min(diff, clip_margin), -clip_margin)
 
-        # Append margin to list of results for that matchup
         if (i, j) not in matchup_results:
             matchup_results[(i, j)] = []
         matchup_results[(i, j)].append(diff)
 
-    # Now compute averages
     for (i, j), margins in matchup_results.items():
         matrix[i][j] = np.mean(margins)
 
     return matrix
 
-
 def main():
-    # Load the filtered 2018 season data
-    df = pd.read_csv("games_2018.csv")
+    start_year = input("Enter the starting year of the season (e.g., 2018 for 2018–2019): ").strip()
+    
+    try:
+        end_year = int(start_year) + 1
+        filename = f"games_{start_year}_{end_year}.csv"
+    except ValueError:
+        print(" Invalid year entered.")
+        return
 
-    # Build team-to-index mapping
+    try:
+        df = pd.read_csv(filename)
+    except FileNotFoundError:
+        print(f" File {filename} not found. Make sure to run filter.py first.")
+        return
+
     team_to_index = build_team_index(df)
+    matrix = build_margin_matrix(df, team_to_index, clip_margin=30)
 
-    # Build matrix using margin of victory
-    matrix = build_margin_matrix(df, team_to_index, clip_margin=30)  # clip huge blowouts
-
-    # Save matrix and index
     np.save("adj_matrix.npy", matrix)
     with open("team_index.json", "w") as f:
         json.dump(team_to_index, f)
 
-    print("Preprocessing complete!")
+    print(" Preprocessing complete!")
     print(f"Matrix shape: {matrix.shape}")
     print(f"Teams: {list(team_to_index.keys())}")
 

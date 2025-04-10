@@ -2,7 +2,6 @@ import numpy as np
 from sklearn.decomposition import TruncatedSVD
 import json
 import pandas as pd
-import os
 
 def load_data():
     matrix = np.load("adj_matrix.npy")
@@ -30,7 +29,7 @@ def mask_known_entries(matrix, keep_ratio=0.75, seed=42):
 
     return train_matrix, test_mask
 
-def apply_svd(matrix, rank=10):
+def apply_svd(matrix, rank=30):
     known_mask = ~np.isnan(matrix)
     filled_matrix = matrix.copy()
     mean_val = np.nanmean(matrix)
@@ -53,35 +52,45 @@ def evaluate_on_test(reconstructed, actual, test_mask):
     return total_errors, total_test, accuracy
 
 def main():
-    # Detect season name from the CSV file used in preprocess step
-    season_name = "2017_2018"  # You can later automate this with CLI args or filenames
+    start_year = input("Enter the starting year of the season (e.g., 2018 for 2018–2019): ").strip()
+
+    try:
+        end_year = int(start_year) + 1
+        season_name = f"{start_year}_{end_year}"
+    except ValueError:
+        print(" Invalid year entered.")
+        return
 
     matrix, _ = load_data()
 
     results = []
+    ranks_to_test = [1, 10, 20, 30]
 
-    for keep_ratio in np.linspace(0.1, 0.9, 9):
-        train_matrix, test_mask = mask_known_entries(matrix, keep_ratio=keep_ratio)
-        reconstructed = apply_svd(train_matrix, rank=30)
-        total_errors, total_test, accuracy = evaluate_on_test(reconstructed, matrix, test_mask)
+    for rank in ranks_to_test:
+        print(f"\n Testing SVD rank: {rank}")
+        for keep_ratio in np.linspace(0.1, 0.9, 9):
+            train_matrix, test_mask = mask_known_entries(matrix, keep_ratio=keep_ratio)
+            reconstructed = apply_svd(train_matrix, rank=rank)
+            total_errors, total_test, accuracy = evaluate_on_test(reconstructed, matrix, test_mask)
 
-        if total_test == 0:
-            print(f"Keep Ratio: {keep_ratio:.2f} | Skipped (no test data)")
-            continue
+            if total_test == 0:
+                print(f"  Keep Ratio: {keep_ratio:.2f} | Skipped (no test data)")
+                continue
 
-        print(f"Keep Ratio: {keep_ratio:.2f} | Accuracy: {accuracy:.4f}")
-        results.append({
-            "keep_ratio": round(keep_ratio, 2),
-            "test_size": int(total_test),
-            "prediction_errors": int(total_errors),
-            "accuracy": round(accuracy, 4)
-    })
+            print(f"  Keep Ratio: {keep_ratio:.2f} | Accuracy: {accuracy:.4f}")
+            results.append({
+                "rank": rank,
+                "keep_ratio": round(keep_ratio, 2),
+                "test_size": int(total_test),
+                "prediction_errors": int(total_errors),
+                "accuracy": round(accuracy, 4)
+            })
 
-    # Save results to CSV
     df = pd.DataFrame(results)
-    filename = f"results_{season_name}.csv"
+    filename = f"results_{season_name}_multi_rank.csv"
     df.to_csv(filename, index=False)
     print(f"\n Saved results to {filename}")
+
 
 if __name__ == "__main__":
     main()
