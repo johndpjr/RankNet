@@ -2,34 +2,21 @@ import numpy as np
 from sklearn.decomposition import TruncatedSVD
 import json
 import pandas as pd
+import os
 
-def load_data():
+def load_data(start_year):
     matrix = np.load("adj_matrix.npy")
     with open("team_index.json", "r") as f:
         team_to_index = json.load(f)
-    return matrix, team_to_index
+    team_to_index = {k: int(v) for k, v in team_to_index.items()}
+    end_year = int(start_year) + 1
+    games_path = f"games_{start_year}_{end_year}_flat.csv"
+    if not os.path.exists(games_path):
+        games_path = "games_flat.csv"
+    games = pd.read_csv(games_path)
+    return matrix, team_to_index, games
 
-def mask_known_entries(matrix, keep_ratio=0.75, seed=42):
-    np.random.seed(seed)
-    known_mask = ~np.isnan(matrix)
-    indices = np.array(np.where(known_mask)).T
-    np.random.shuffle(indices)
-
-    total = len(indices)
-    keep_count = int(total * keep_ratio)
-    test_indices = indices[keep_count:]
-
-    train_matrix = matrix.copy()
-    for i, j in test_indices:
-        train_matrix[i, j] = np.nan
-
-    test_mask = np.full(matrix.shape, False)
-    for i, j in test_indices:
-        test_mask[i, j] = True
-
-    return train_matrix, test_mask
-
-def apply_svd(matrix, rank=30):
+def apply_svd(matrix, rank=1):
     known_mask = ~np.isnan(matrix)
     filled_matrix = matrix.copy()
     mean_val = np.nanmean(matrix)
@@ -41,15 +28,24 @@ def apply_svd(matrix, rank=30):
     reconstructed = np.dot(U, V)
     return reconstructed
 
-def evaluate_on_test(reconstructed, actual, test_mask):
-    pred_sign = np.sign(reconstructed)
-    true_sign = np.sign(actual)
+def evaluate_by_game(games, reconstructed, keep_ratio, seed=42):
+    np.random.seed(seed)
+    games_shuffled = games.sample(frac=1, random_state=seed).reset_index(drop=True)
 
-    mismatches = (pred_sign != true_sign) & test_mask
-    total_errors = np.sum(mismatches)
-    total_test = np.sum(test_mask)
-    accuracy = (total_test - total_errors) / total_test
-    return total_errors, total_test, accuracy
+    total_games = len(games_shuffled)
+    train_count = int(total_games * keep_ratio)
+    test_games = games_shuffled.iloc[train_count:]
+
+    correct = 0
+    for _, row in test_games.iterrows():
+        i, j = int(row['home_idx']), int(row['away_idx'])
+        predicted_margin = reconstructed[i][j]
+        actual_margin = row['margin']
+        if np.sign(predicted_margin) == np.sign(actual_margin):
+            correct += 1
+
+    total_test = len(test_games)
+    return total_test, total_test - correct, correct / total_test
 
 def main():
     start_year = input("Enter the starting year of the season (e.g., 2018 for 2018–2019): ").strip()
@@ -61,36 +57,25 @@ def main():
         print(" Invalid year entered.")
         return
 
-    matrix, _ = load_data()
+    matrix, team_to_index, games = load_data(start_year)
+    reconstructed = apply_svd(matrix, rank=1)
 
     results = []
-    ranks_to_test = [1, 10, 20, 30]
 
-    for rank in ranks_to_test:
-        print(f"\n Testing SVD rank: {rank}")
-        for keep_ratio in np.linspace(0.1, 0.9, 9):
-            train_matrix, test_mask = mask_known_entries(matrix, keep_ratio=keep_ratio)
-            reconstructed = apply_svd(train_matrix, rank=rank)
-            total_errors, total_test, accuracy = evaluate_on_test(reconstructed, matrix, test_mask)
-
-            if total_test == 0:
-                print(f"  Keep Ratio: {keep_ratio:.2f} | Skipped (no test data)")
-                continue
-
-            print(f"  Keep Ratio: {keep_ratio:.2f} | Accuracy: {accuracy:.4f}")
-            results.append({
-                "rank": rank,
-                "keep_ratio": round(keep_ratio, 2),
-                "test_size": int(total_test),
-                "prediction_errors": int(total_errors),
-                "accuracy": round(accuracy, 4)
-            })
+    for keep_ratio in np.linspace(0.1, 0.9, 9):
+        test_size, prediction_errors, accuracy = evaluate_by_game(games, reconstructed, keep_ratio)
+        print(f"Keep Ratio: {keep_ratio:.2f} | Accuracy: {accuracy:.4f}")
+        results.append({
+            "keep_ratio": round(keep_ratio, 2),
+            "test_size": int(test_size),
+            "prediction_errors": int(prediction_errors),
+            "accuracy": round(accuracy, 4)
+        })
 
     df = pd.DataFrame(results)
-    filename = f"results_{season_name}_multi_rank.csv"
+    filename = f"results_{season_name}.csv"
     df.to_csv(filename, index=False)
     print(f"\n Saved results to {filename}")
-
 
 if __name__ == "__main__":
     main()

@@ -7,11 +7,10 @@ def build_team_index(df):
     team_to_index = {team: idx for idx, team in enumerate(teams)}
     return team_to_index
 
-def build_margin_matrix(df, team_to_index, clip_margin=None):
-    n = len(team_to_index)
-    matrix = np.full((n, n), np.nan)
-    
-    matchup_results = {}
+def extract_games_and_matrix(df, team_to_index, clip_margin=None, home_bias=5):
+    games = []
+    matrix = np.full((len(team_to_index), len(team_to_index)), np.nan)
+    matchups = {}
 
     for _, row in df.iterrows():
         home = row['team_abbreviation_home']
@@ -24,23 +23,29 @@ def build_margin_matrix(df, team_to_index, clip_margin=None):
 
         i = team_to_index[home]
         j = team_to_index[away]
-        diff = pts_home - pts_away
 
-        if clip_margin:
-            diff = max(min(diff, clip_margin), -clip_margin)
+        margin = pts_home - pts_away + home_bias
+        if clip_margin is not None:
+            margin = max(min(margin, clip_margin), -clip_margin)
 
-        if (i, j) not in matchup_results:
-            matchup_results[(i, j)] = []
-        matchup_results[(i, j)].append(diff)
+        games.append({
+            'home_idx': i,
+            'away_idx': j,
+            'margin': margin
+        })
 
-    for (i, j), margins in matchup_results.items():
+        if (i, j) not in matchups:
+            matchups[(i, j)] = []
+        matchups[(i, j)].append(margin)
+
+    for (i, j), margins in matchups.items():
         matrix[i][j] = np.mean(margins)
 
-    return matrix
+    return matrix, team_to_index, games
 
 def main():
     start_year = input("Enter the starting year of the season (e.g., 2018 for 2018–2019): ").strip()
-    
+
     try:
         end_year = int(start_year) + 1
         filename = f"games_{start_year}_{end_year}.csv"
@@ -55,14 +60,16 @@ def main():
         return
 
     team_to_index = build_team_index(df)
-    matrix = build_margin_matrix(df, team_to_index, clip_margin=30)
+    matrix, team_to_index, games = extract_games_and_matrix(df, team_to_index, clip_margin=30)
 
     np.save("adj_matrix.npy", matrix)
     with open("team_index.json", "w") as f:
         json.dump(team_to_index, f)
+    pd.DataFrame(games).to_csv("games_flat.csv", index=False)
 
     print(" Preprocessing complete!")
     print(f"Matrix shape: {matrix.shape}")
+    print(f"Saved {len(games)} individual games for evaluation.")
     print(f"Teams: {list(team_to_index.keys())}")
 
 if __name__ == "__main__":
