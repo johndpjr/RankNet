@@ -7,10 +7,8 @@ def build_team_index(df):
     team_to_index = {team: idx for idx, team in enumerate(teams)}
     return team_to_index
 
-def extract_games_and_matrix(df, team_to_index, clip_margin=None, home_bias=5):
+def extract_games_individual(df, team_to_index, clip_margin=None, home_bias=5):
     games = []
-    matrix = np.full((len(team_to_index), len(team_to_index)), np.nan)
-    matchups = {}
 
     for _, row in df.iterrows():
         home = row['team_abbreviation_home']
@@ -21,27 +19,20 @@ def extract_games_and_matrix(df, team_to_index, clip_margin=None, home_bias=5):
         if pd.isna(pts_home) or pd.isna(pts_away):
             continue
 
-        i = team_to_index[home]
-        j = team_to_index[away]
+        home_idx = team_to_index[home]
+        away_idx = team_to_index[away]
 
         margin = pts_home - pts_away + home_bias
         if clip_margin is not None:
             margin = max(min(margin, clip_margin), -clip_margin)
 
         games.append({
-            'home_idx': i,
-            'away_idx': j,
+            'home_idx': home_idx,
+            'away_idx': away_idx,
             'margin': margin
         })
 
-        if (i, j) not in matchups:
-            matchups[(i, j)] = []
-        matchups[(i, j)].append(margin)
-
-    for (i, j), margins in matchups.items():
-        matrix[i][j] = np.mean(margins)
-
-    return matrix, team_to_index, games
+    return games, team_to_index
 
 def main():
     start_year = input("Enter the starting year of the season (e.g., 2018 for 2018–2019): ").strip()
@@ -60,16 +51,17 @@ def main():
         return
 
     team_to_index = build_team_index(df)
-    matrix, team_to_index, games = extract_games_and_matrix(df, team_to_index, clip_margin=30)
+    games, team_to_index = extract_games_individual(df, team_to_index, clip_margin=30)
 
-    np.save("adj_matrix.npy", matrix)
     with open("team_index.json", "w") as f:
         json.dump(team_to_index, f)
-    pd.DataFrame(games).to_csv("games_flat.csv", index=False)
+
+    flat_filename = f"games_{start_year}_{end_year}_flat.csv"
+    pd.DataFrame(games).to_csv(flat_filename, index=False)
 
     print(" Preprocessing complete!")
-    print(f"Matrix shape: {matrix.shape}")
-    print(f"Saved {len(games)} individual games for evaluation.")
+    print(f"Saved {len(games)} individual games for training and evaluation.")
+    print(f"Saved flat game data to {flat_filename}")
     print(f"Teams: {list(team_to_index.keys())}")
 
 if __name__ == "__main__":
