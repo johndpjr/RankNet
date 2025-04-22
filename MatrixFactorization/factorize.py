@@ -14,6 +14,15 @@ def load_data(start_year):
     with open("team_index.json", "r") as f:
         team_to_index = json.load(f)
     team_to_index = {k: int(v) for k, v in team_to_index.items()}
+    # Load raw unmodified CSV to compute true home win rate
+    raw_filename = f"games_{start_year}_{int(start_year)+1}.csv"
+    try:
+        raw_games = pd.read_csv(raw_filename)
+        true_home_win_rate = (raw_games['pts_home'] > raw_games['pts_away']).mean()
+        print(f"True NBA Home Win Rate (no bias): {true_home_win_rate:.4f}")
+    except:
+        print("Could not load raw CSV to compute true home win rate.")
+
 
     end_year = int(start_year) + 1
     games_path = f"games_{start_year}_{end_year}_flat.csv"
@@ -107,13 +116,6 @@ def main():
         team_vecs, team_bias = train_latent_model(train_games.copy(), num_teams)
         acc = evaluate(test_games, team_vecs, team_bias)
         accuracies.append(acc)
-
-    mean_acc = np.mean(accuracies)
-    std_acc = np.std(accuracies)
-    print(f"One-game (avg of {trials}) | Accuracy: {mean_acc:.4f} ± {std_acc:.4f}")
-
-    baseline = (games['margin'] > 0).mean()
-    print(f"Naive baseline (predict home team wins): {baseline:.4f}")
 
 
 if __name__ == "__main__":
