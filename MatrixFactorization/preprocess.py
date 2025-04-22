@@ -7,7 +7,7 @@ def build_team_index(df):
     team_to_index = {team: idx for idx, team in enumerate(teams)}
     return team_to_index
 
-def extract_games_individual(df, team_to_index, clip_margin=None, home_bias=5):
+def extract_games_individual(df, team_to_index, clip_margin=None, home_bias=0):
     games = []
 
     for _, row in df.iterrows():
@@ -57,6 +57,9 @@ def main():
         json.dump(team_to_index, f)
 
     flat_filename = f"games_{start_year}_{end_year}_flat.csv"
+    home_win_rate = sum(g['margin'] > 0 for g in games) / len(games)
+    print(f"[preprocess] home‑wins in margins: {home_win_rate:.4f}")
+# sanity‑check – should be ≈ 0.5927
     pd.DataFrame(games).to_csv(flat_filename, index=False)
 
     print(" Preprocessing complete!")

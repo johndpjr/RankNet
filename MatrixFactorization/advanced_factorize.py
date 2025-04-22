@@ -1,118 +1,95 @@
-import numpy as np
-import pandas as pd
-import json
-import os
+import numpy as np, pandas as pd, json, os
+from pathlib import Path
 
-# Hyperparameters
+# ---------- hyper‑parameters ----------
 LATENT_DIM = 5
-LEARNING_RATE = 0.01
-EPOCHS = 100
-HOME_BIAS = 5
+LR          = 0.01
+EPOCHS      = 100
+CLIP        = 5.0          # gradient / error clip
+# --------------------------------------
 
-def load_data(start_year):
-    with open("team_index.json", "r") as f:
-        team_to_index = json.load(f)
-    team_to_index = {k: int(v) for k, v in team_to_index.items()}
+def load_data(start_year: int):
+    test_path  = Path(f"games_{start_year}_{start_year+1}_flat.csv")
+    train_path = Path("games_training_flat.csv")
+    if not test_path.exists() or not train_path.exists():
+        raise FileNotFoundError("Run advanced_preprocessing.py first.")
 
-    raw_filename = f"games_{start_year}_{int(start_year)+1}.csv"
-    try:
-        raw_games = pd.read_csv(raw_filename)
-        true_home_win_rate = (raw_games['pts_home'] > raw_games['pts_away']).mean()
-        print(f"True NBA Home Win Rate (no bias): {true_home_win_rate:.4f}")
-    except:
-        print("Could not load raw CSV to compute true home win rate.")
+    idx   = {k: int(v) for k, v in json.load(open("team_index.json")).items()}
+    test  = pd.read_csv(test_path)
+    train = pd.read_csv(train_path)
 
-    test_path = f"games_{start_year}_{int(start_year)+1}_flat.csv"
-    train_path = "games_training_flat.csv"
+    raw   = pd.read_csv(f"games_{start_year}_{start_year+1}.csv")
+    print("True NBA home‑win rate :", (raw.pts_home > raw.pts_away).mean())
+    print("Label test home‑wins   :", (test.margin  > 0).mean())
+    return idx, train, test
 
-    if not os.path.exists(test_path) or not os.path.exists(train_path):
-        raise FileNotFoundError("Missing training or testing flat files. Did you run advanced_preprocessing.py?")
 
-    test_games = pd.read_csv(test_path)
-    training_games = pd.read_csv(train_path)
-    return team_to_index, training_games, test_games
+def train_latent_model(df: pd.DataFrame, n_teams: int):
+    U = np.random.normal(0, 0.1, (n_teams, LATENT_DIM))
+    b = np.zeros(n_teams)
 
-def train_latent_model(train_games, num_teams):
-    team_vecs = np.random.normal(0, 0.1, size=(num_teams, LATENT_DIM))
-    team_bias = np.zeros(num_teams)
+    for _ in range(EPOCHS):
+        for r in df.sample(frac=1).itertuples():
+            i, j, y = int(r.home_idx), int(r.away_idx), r.margin
 
-    for epoch in range(EPOCHS):
-        train_games = train_games.sample(frac=1).reset_index(drop=True)
-        for _, row in train_games.iterrows():
-            i, j, true_margin = int(row['home_idx']), int(row['away_idx']), row['margin']
+            dot  = np.dot(U[i], U[j])
+            err  = dot + b[i] - b[j] - y
+            err_c = np.clip(err, -CLIP, CLIP)
 
-            pred_margin = team_vecs[i] @ team_vecs[j] + team_bias[i] - team_bias[j] + HOME_BIAS
-            error = pred_margin - true_margin
+            grad_Ui = err_c * U[j]
+            grad_Uj = err_c * U[i]
 
-            grad_i = error * team_vecs[j]
-            grad_j = error * team_vecs[i]
+            U[i] -= LR * np.clip(grad_Ui, -CLIP, CLIP)
+            U[j] -= LR * np.clip(grad_Uj, -CLIP, CLIP)
+            b[i] -= LR * err_c
+            b[j] += LR * err_c
 
-            team_vecs[i] -= LEARNING_RATE * grad_i
-            team_vecs[j] -= LEARNING_RATE * grad_j
+    return U, b
 
-            team_bias[i] -= LEARNING_RATE * error
-            team_bias[j] += LEARNING_RATE * error
 
-    return team_vecs, team_bias
+def evaluate(df, U, b):
+    i = df.home_idx.values
+    j = df.away_idx.values
+    preds = np.sign((U[i] * U[j]).sum(1) + b[i] - b[j])
+    return (preds == np.sign(df.margin.values)).mean()
 
-def evaluate(test_games, team_vecs, team_bias):
-    correct = 0
-    for _, row in test_games.iterrows():
-        i, j, actual_margin = int(row['home_idx']), int(row['away_idx']), row['margin']
-        predicted_margin = team_vecs[i] @ team_vecs[j] + team_bias[i] - team_bias[j] + HOME_BIAS
-        if np.sign(predicted_margin) == np.sign(actual_margin):
-            correct += 1
-
-    accuracy = correct / len(test_games)
-    return accuracy
 
 def main():
-    start_year = input("Enter the starting year of the season (e.g., 2018): ").strip()
+    start_year = int(input("Target season start year (e.g. 2019): ").strip())
+    idx, train_all, test_full = load_data(start_year)
+    n = len(idx)
 
-    try:
-        team_to_index, all_training_games, full_test_games = load_data(start_year)
-    except Exception as e:
-        print("Error loading data:", e)
-        return
+    # previous three seasons in ascending order
+    seasons = sorted(train_all.season.unique())
+    decay_w = {seasons[0]: 0.4, seasons[1]: 0.6, seasons[2]: 0.8}
 
-    num_teams = len(team_to_index)
+    def apply_decay(df, w):
+        k = max(1, int(w * 10))            # at least one copy
+        return pd.concat([df] * k, ignore_index=True)
+
     results = []
+    for keep in np.linspace(0.1, 0.9, 9):
+        shuffled = test_full.sample(frac=1)      # new shuffle each loop
+        split    = int(len(shuffled) * keep)
+        seen, unseen = shuffled[:split], shuffled[split:]
 
-    for keep_ratio in np.linspace(0.1, 0.9, 9):
-        shuffled = full_test_games.sample(frac=1, random_state=42).reset_index(drop=True)
-        split = int(len(shuffled) * keep_ratio)
-        seen_games = shuffled.iloc[:split]
-        unseen_games = shuffled.iloc[split:]
+        combined = pd.concat(
+            [apply_decay(train_all[train_all.season == s], w)
+             for s, w in decay_w.items()] + [seen],
+            ignore_index=True
+        )
 
-        # Combine historical training data with observed games from the current season
-        def apply_decay(df, weight):
-            return pd.concat([df] * int(weight * 10), ignore_index=True)
+        U, b = train_latent_model(combined, n)
+        acc  = evaluate(unseen, U, b)
+        results.append({"keep_ratio": round(keep, 2),
+                        "accuracy":   round(acc, 4)})
+        print(f"Keep {keep:0.2f} | Accuracy {acc:.4f}")
 
-        # Assuming you split your historical data per season beforehand
-        df_2015 = all_training_games[all_training_games['season'] == 2015]
-        df_2016 = all_training_games[all_training_games['season'] == 2016]
-        df_2017 = all_training_games[all_training_games['season'] == 2017]
+    pd.DataFrame(results).to_csv(
+        f"advanced_results_{start_year}_{start_year+1}.csv", index=False
+    )
+    print("Saved results file.")
 
-        combined_training = pd.concat([
-            apply_decay(df_2015, 0.4),
-            apply_decay(df_2016, 0.6),
-            apply_decay(df_2017, 0.8),
-            apply_decay(seen_games, 1.0)
-        ], ignore_index=True)
-
-        team_vecs, team_bias = train_latent_model(combined_training, num_teams)
-        accuracy = evaluate(unseen_games, team_vecs, team_bias)
-
-        print(f"Keep Ratio: {keep_ratio:.2f} | Accuracy: {accuracy:.4f}")
-        results.append({
-            "keep_ratio": round(keep_ratio, 2),
-            "accuracy": round(accuracy, 4)
-        })
-
-    df = pd.DataFrame(results)
-    filename = f"advanced_results_{start_year}_{int(start_year)+1}.csv"
-    df.to_csv(filename, index=False)
-    print(f"\nSaved results to {filename}")
 
 if __name__ == "__main__":
     main()

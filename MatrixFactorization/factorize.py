@@ -7,7 +7,7 @@ import os
 LATENT_DIM = 5
 LEARNING_RATE = 0.01
 EPOCHS = 100
-HOME_BIAS = 5
+HOME_BIAS = 0
 
 
 def load_data(start_year):
@@ -105,18 +105,20 @@ def main():
     df.to_csv(filename, index=False)
     print(f"\nSaved results to {filename}")
 
-    # Averaged one-game test
-    print("\n--- Averaged One-Game Training Test (20 trials) ---")
     accuracies = []
     trials = 20
     for i in range(trials):
         train_games = games.sample(n=1)
         test_games = games.drop(train_games.index)
 
+        #print("Recorded home‑wins in test set:",
+        #(test_games['margin'] > 0).mean())
+        
         team_vecs, team_bias = train_latent_model(train_games.copy(), num_teams)
         acc = evaluate(test_games, team_vecs, team_bias)
         accuracies.append(acc)
-
+    print("Recorded home‑wins in test set:",
+    (test_games['margin'] > 0).mean())
 
 if __name__ == "__main__":
     main()
