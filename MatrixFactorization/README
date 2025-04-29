@@ -1,0 +1,55 @@
+# Latent-Learning ( `MatrixFactorization/` )  
+*Pair-wise latent-factor models for predicting NBA game outcomes*
+
+> We started with classic 30 × 30 matrix-factorisation, but quickly
+> discovered that learning **pair-wise margins** (home vs away) is simpler,
+> numerically stabler, and just as accurate.  
+> The folder name stuck, the model changed.
+
+---
+
+## 0 .  Prerequisites
+* Python ≥ 3.9  
+* `pandas`, `numpy`
+* The raw Kaggle dataset in `../nba/game.csv`
+
+```bash
+pip install pandas numpy
+
+# --- one-season quick-start (example: 2021-22) ---
+python filter.py        # 2021  →  games_2021_2022.csv
+python preprocess.py    # 2021  →  games_2021_2022_flat.csv + team_index.json
+python factorize.py     # 2021  →  results_2021_2022.csv
+
+
+
+
+## 1 . Advanced pipeline – *“learn from the last three seasons too”*  
+*(files: `advanced_preprocessing.py`, `advanced_factorize.py`)*
+
+| what it does | how to run |
+|--------------|------------|
+|**`advanced_preprocessing.py`**  | 1⃣ Run `filter.py` for **four** seasons: the target year *Y* and *Y-3*, *Y-2*, *Y-1*. <br>2⃣ `python advanced_preprocessing.py` ← answer *Y* (e.g. `2019`). <br><br>Creates<br>• `games_training_flat.csv` (all prior seasons)<br>• `games_Y_Y+1_flat.csv` (target season)<br>• shared `team_index.json`.|
+|**`advanced_factorize.py`**  | `python advanced_factorize.py` ← same *Y*.<br><br>*During training it applies a decay weight* (0.4, 0.6, 0.8) to the three older seasons, then gradually appends the current season as games are “revealed.” Results go to `advanced_results_Y_Y+1.csv`. |
+
+---
+
+## 2 . Ensemble pipeline – *latent factors + PageRank + Off/Def*  
+*(files: `ensemble_preprocessing.py`, `ensemble_factorize.py`)*
+
+> Hard-coded for the **2022-23** season.
+
+1. **Place the auxiliary CSVs** you got from team-mates in this folder:  
+   * `pagerank_2021.csv` – one column `PageRank_Score`  
+   * `offdef_2021.csv`   – columns `Offense_Score`, `Defense_Score`
+2. ```bash
+   python ensemble_preprocessing.py   # answer 2022
+
+Predicts  
+`ŷ  =  latent_margin  +  α·ΔPageRank  +  β·ΔOff  +  γ·ΔDef`  
+(weights α = β = γ = 1 by default; edit inside the script).  
+Results saved to `ensemble_results_2022_2023.csv`.
+
+All ensemble steps sanity-print **“Label home-wins”** vs **“True NBA home-win
+rate”**; if they ever diverge, rerun `ensemble_preprocessing.py`.
+
