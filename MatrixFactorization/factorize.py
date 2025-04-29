@@ -1,74 +1,124 @@
 import numpy as np
-from sklearn.decomposition import TruncatedSVD
+import pandas as pd
 import json
+import os
 
-def load_data():
-    matrix = np.load("adj_matrix.npy")
+# Hyperparameters
+LATENT_DIM = 5
+LEARNING_RATE = 0.01
+EPOCHS = 100
+HOME_BIAS = 10
+
+
+def load_data(start_year):
     with open("team_index.json", "r") as f:
         team_to_index = json.load(f)
-    return matrix, team_to_index
+    team_to_index = {k: int(v) for k, v in team_to_index.items()}
+    # Load raw unmodified CSV to compute true home win rate
+    raw_filename = f"games_{start_year}_{int(start_year)+1}.csv"
+    try:
+        raw_games = pd.read_csv(raw_filename)
+        true_home_win_rate = (raw_games['pts_home'] > raw_games['pts_away']).mean()
+        print(f"True NBA Home Win Rate (no bias): {true_home_win_rate:.4f}")
+    except:
+        print("Could not load raw CSV to compute true home win rate.")
 
-def mask_known_entries(matrix, keep_ratio=0.75, seed=42):
-    np.random.seed(seed)
-    known_mask = ~np.isnan(matrix)
-    indices = np.array(np.where(known_mask)).T
-    np.random.shuffle(indices)
 
-    total = len(indices)
-    keep_count = int(total * keep_ratio)
-    keep_indices = indices[:keep_count]
-    test_indices = indices[keep_count:]
+    end_year = int(start_year) + 1
+    games_path = f"games_{start_year}_{end_year}_flat.csv"
+    if not os.path.exists(games_path):
+        raise FileNotFoundError(f"Could not find game data at {games_path}")
 
-    # Create a new matrix for training
-    train_matrix = matrix.copy()
-    for i, j in test_indices:
-        train_matrix[i, j] = np.nan  # hide test values
+    games = pd.read_csv(games_path)
+    return team_to_index, games
 
-    test_mask = np.full(matrix.shape, False)
-    for i, j in test_indices:
-        test_mask[i, j] = True
 
-    return train_matrix, test_mask
+def train_latent_model(train_games, num_teams):
+    # Initialize latent vectors and biases
+    team_vecs = np.random.normal(0, 0.1, size=(num_teams, LATENT_DIM))
+    team_bias = np.zeros(num_teams)
 
-def apply_svd(matrix, rank=10):
-    known_mask = ~np.isnan(matrix)
-    filled_matrix = matrix.copy()
-    mean_val = np.nanmean(matrix)
-    filled_matrix[~known_mask] = mean_val
+    for epoch in range(EPOCHS):
+        train_games = train_games.sample(frac=1).reset_index(drop=True)  # <- FIXED SHUFFLE
+        for _, row in train_games.iterrows():
+            i, j, true_margin = int(row['home_idx']), int(row['away_idx']), row['margin']
 
-    svd = TruncatedSVD(n_components=rank)
-    U = svd.fit_transform(filled_matrix)
-    V = svd.components_
-    reconstructed = np.dot(U, V)
-    return reconstructed
+            pred_margin = team_vecs[i] @ team_vecs[j] + team_bias[i] - team_bias[j] + HOME_BIAS
+            error = pred_margin - true_margin
 
-def evaluate_on_test(reconstructed, actual, test_mask, threshold=0.5):
-    predictions = (reconstructed >= threshold).astype(int)
-    actual_binary = np.where(actual >= 0.5, 1, 0)
+            # Gradient updates
+            grad_i = error * team_vecs[j]
+            grad_j = error * team_vecs[i]
 
-    mismatches = (predictions != actual_binary) & test_mask
-    total_errors = np.sum(mismatches)
-    total_test = np.sum(test_mask)
+            team_vecs[i] -= LEARNING_RATE * grad_i
+            team_vecs[j] -= LEARNING_RATE * grad_j
 
-    accuracy = (total_test - total_errors) / total_test
-    return total_errors, total_test, accuracy
+            team_bias[i] -= LEARNING_RATE * error
+            team_bias[j] += LEARNING_RATE * error
+
+    return team_vecs, team_bias
+
+
+
+def evaluate(test_games, team_vecs, team_bias):
+    correct = 0
+    for _, row in test_games.iterrows():
+        i, j, actual_margin = int(row['home_idx']), int(row['away_idx']), row['margin']
+        predicted_margin = team_vecs[i] @ team_vecs[j] + team_bias[i] - team_bias[j] + HOME_BIAS
+        if np.sign(predicted_margin) == np.sign(actual_margin):
+            correct += 1
+
+    accuracy = correct / len(test_games)
+    return accuracy
+
 
 def main():
-    matrix, _ = load_data()
+    start_year = input("Enter the starting year of the season (e.g., 2018): ").strip()
 
-    # Try this at different values: 0.25, 0.5, 0.75
-    train_matrix, test_mask = mask_known_entries(matrix, keep_ratio=0.9)
+    try:
+        team_to_index, games = load_data(start_year)
+    except Exception as e:
+        print("Error loading data:", e)
+        return
 
-    reconstructed = apply_svd(train_matrix, rank=10)
+    num_teams = len(team_to_index)
+    results = []
 
-    total_errors, total_test, accuracy = evaluate_on_test(
-        reconstructed, matrix, test_mask
-    )
+    for keep_ratio in np.linspace(0.1, 0.9, 9):
+        shuffled = games.sample(frac=1, random_state=42).reset_index(drop=True)
+        split = int(len(shuffled) * keep_ratio)
+        train_games = shuffled.iloc[:split]
+        test_games = shuffled.iloc[split:]
 
-    print("🎯 Evaluation on Held-Out Data:")
-    print(f"Tested matchups: {total_test}")
-    print(f"Prediction errors: {total_errors}")
-    print(f"Accuracy on unseen games: {accuracy:.4f}")
+        team_vecs, team_bias = train_latent_model(train_games, num_teams)
+        accuracy = evaluate(test_games, team_vecs, team_bias)
+
+        print(f"Keep Ratio: {keep_ratio:.2f} | Accuracy: {accuracy:.4f}")
+        results.append({
+            "keep_ratio": round(keep_ratio, 2),
+            "accuracy": round(accuracy, 4)
+        })
+
+    # Save results
+    df = pd.DataFrame(results)
+    filename = f"results_{start_year}_{int(start_year)+1}.csv"
+    df.to_csv(filename, index=False)
+    print(f"\nSaved results to {filename}")
+
+    accuracies = []
+    trials = 20
+    for i in range(trials):
+        train_games = games.sample(n=1)
+        test_games = games.drop(train_games.index)
+
+        #print("Recorded home‑wins in test set:",
+        #(test_games['margin'] > 0).mean())
+        
+        team_vecs, team_bias = train_latent_model(train_games.copy(), num_teams)
+        acc = evaluate(test_games, team_vecs, team_bias)
+        accuracies.append(acc)
+    print("Recorded home‑wins in test set:",
+    (test_games['margin'] > 0).mean())
 
 if __name__ == "__main__":
     main()
