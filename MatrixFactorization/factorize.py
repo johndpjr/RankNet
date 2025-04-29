@@ -7,7 +7,7 @@ import os
 LATENT_DIM = 5
 LEARNING_RATE = 0.01
 EPOCHS = 100
-HOME_BIAS = 0
+HOME_BIAS = 10
 
 
 def load_data(start_year):

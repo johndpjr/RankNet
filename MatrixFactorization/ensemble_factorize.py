@@ -5,7 +5,7 @@ import numpy as np, pandas as pd, json, os
 LATENT_DIM, LR, EPOCHS = 5, 0.01, 100
 CLIP                   = 5.0        # gradient / err clip
 ALPHA, BETA, GAMMA     = 1.0, 1.0, 1.0   # weights for PR / off / def
-HOME_BIAS              = 0          # keep unbiased
+HOME_BIAS              = 10         # keep unbiased
 # -------------------------------------------
 
 def load_data(year):
